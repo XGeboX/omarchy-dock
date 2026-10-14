@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+from pathlib import Path
+from datetime import datetime, timezone
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+PAYLOAD = ROOT / 'plugin'
+MANIFEST = json.loads((PAYLOAD / 'manifest.json').read_text())
+PLUGIN_ID = MANIFEST['id']
+
+
+class DockError(Exception):
+    pass
+
+
+def command(args):
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        raise DockError('Omarchy shell is unavailable. Run this command in your desktop session.') from None
+    if result.returncode:
+        raise DockError(result.stderr.strip() or 'Omarchy command failed.')
+    output = result.stdout.strip()
+    if output in ['Target not found.', 'Function not found.', 'unknown']:
+        raise DockError('The running Omarchy shell does not support this operation.')
+    return output
+
+
+def paths():
+    home = Path.home()
+    return home / '.config/omarchy/plugins' / PLUGIN_ID, home / '.config/omarchy-dock/config.json'
+
+
+def require_session():
+    if os.geteuid() == 0:
+        raise DockError('Activate the dock as your desktop user, without sudo.')
+    if command(['omarchy', 'shell', 'shell', 'ping']) != 'ok':
+        raise DockError('Omarchy shell is not ready.')
+
+
+def backup_preferences(config):
+    candidates = [Path.home() / '.config/omarchy/shell.json', config]
+    existing = [path for path in candidates if path.exists()]
+    if not existing:
+        return
+    parent = Path.home() / '.local/state/omarchy-dock/backups'
+    parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-')
+    backup = Path(tempfile.mkdtemp(prefix=stamp, dir=parent))
+    for path in existing:
+        shutil.copy2(path, backup / path.name)
+
+
+def validate_target(target):
+    if os.path.lexists(target) and (not target.is_symlink() or target.resolve() != PAYLOAD):
+        raise DockError(f'{PLUGIN_ID} already has another installation. Archive it before changing install methods.')
+
+
+def validate_config(config):
+    if os.path.lexists(config):
+        try:
+            value = json.loads(config.read_text())
+            if not isinstance(value, dict) or not isinstance(value.get('pinned', []), list):
+                raise ValueError()
+        except (OSError, ValueError):
+            raise DockError('Existing dock configuration is invalid; it has been preserved.') from None
+
+
+def enable():
+    require_session()
+    target, config = paths()
+    validate_target(target)
+    validate_config(config)
+    backup_preferences(config)
+    if not config.exists():
+        config.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with config.open('x') as file:
+                file.write((ROOT / 'config.example.json').read_text())
+        except FileExistsError:
+            validate_config(config)
+    validate_config(config)
+    if not os.path.lexists(target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.symlink_to(PAYLOAD, target_is_directory=True)
+        except FileExistsError:
+            validate_target(target)
+    validate_target(target)
+    command(['omarchy', 'shell', 'shell', 'rescanPlugins'])
+    deadline = time.monotonic() + 5
+    registered = False
+    for _ in range(20):
+        try:
+            plugins = json.loads(command(['omarchy', 'shell', 'shell', 'listPlugins']))
+        except ValueError:
+            plugins = []
+        if isinstance(plugins, list) and any(isinstance(item, dict) and item.get('id') == PLUGIN_ID for item in plugins):
+            registered = True
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
+    if not registered:
+        raise DockError('Plugin registration is not ready. Run: omarchy restart shell')
+    validate_target(target)
+    validate_config(config)
+    command(['omarchy', 'plugin', 'enable', PLUGIN_ID])
+    deadline = time.monotonic() + 5
+    for _ in range(20):
+        try:
+            profile = json.loads(command(['omarchy', 'shell', 'omarchy-dock', 'motionProfile']))
+        except (DockError, ValueError):
+            profile = {}
+        if isinstance(profile, dict) and profile.get('version') == MANIFEST['version']:
+            print('Enabled Omarchy Dock ' + MANIFEST['version'])
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.25)
+    raise DockError('Plugin is configured, but this version is not live yet. Run: omarchy restart shell')
+
+
+def disable():
+    require_session()
+    _, config = paths()
+    backup_preferences(config)
+    command(['omarchy', 'plugin', 'disable', PLUGIN_ID])
+    print('Disabled Omarchy Dock. Preferences and source are retained.')
+
+
+def status():
+    target, _ = paths()
+    result = {'plugin': PLUGIN_ID, 'installed': (target / 'manifest.json').is_file()}
+    try:
+        result['live'] = json.loads(command(['omarchy', 'shell', 'omarchy-dock', 'motionProfile']))
+    except (DockError, ValueError):
+        result['live'] = None
+    print(json.dumps(result, indent=2))
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Enable, disable or inspect the Omarchy Dock plugin.')
+    parser.add_argument('action', choices=['enable', 'disable', 'status'])
+    args = parser.parse_args()
+    try:
+        {'enable': enable, 'disable': disable, 'status': status}[args.action]()
+    except DockError as error:
+        print('omarchy-dock: ' + str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

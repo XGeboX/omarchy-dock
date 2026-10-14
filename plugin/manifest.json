@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "xgebox.dock",
+  "name": "Omarchy Dock",
+  "version": "0.6.1",
+  "author": "Anirudh Sharma",
+  "description": "A responsive, theme-aware application dock with pins, window controls and magnification.",
+  "kinds": [
+    "service"
+  ],
+  "entryPoints": {
+    "service": "Dock.qml"
+  },
+  "keepLoaded": true
+}

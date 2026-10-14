@@ -1,0 +1,31 @@
+# Maintainer: Anirudh Sharma
+pkgname=omarchy-dock
+pkgver=0.6.1
+pkgrel=1
+pkgdesc='Responsive, theme-aware application dock for the Omarchy shell'
+arch=('any')
+url='https://github.com/XGeboX/omarchy-dock'
+license=('MIT')
+depends=('omarchy>=4.0.4' 'quickshell>=0.3.1' 'python')
+checkdepends=('qt6-declarative' 'qt6-svg')
+install=omarchy-dock.install
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
+sha256sums=('213297ca9587bd2d11c08d629c41735ef8832150c0285abffddabc5bc5c435a9')
+
+check() {
+  cd "$srcdir/$pkgname-$pkgver"
+  python3 tools/test.py
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+  install -d "$pkgdir/usr/share/$pkgname/plugin" "$pkgdir/usr/share/$pkgname/bin"
+  install -m644 plugin/Dock.qml plugin/DockMotion.js plugin/manifest.json "$pkgdir/usr/share/$pkgname/plugin/"
+  install -m644 config.example.json "$pkgdir/usr/share/$pkgname/"
+  install -m755 bin/omarchy-dock "$pkgdir/usr/share/$pkgname/bin/omarchy-dock"
+  install -d "$pkgdir/usr/bin"
+  ln -s "../share/$pkgname/bin/omarchy-dock" "$pkgdir/usr/bin/omarchy-dock"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 docs/hover.png "$pkgdir/usr/share/doc/$pkgname/docs/hover.png"
+}
