@@ -1,0 +1,21 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - name: Install test dependencies
+        run: pacman -Syu --noconfirm git python qt6-declarative qt6-svg
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run installer, motion and rendered tests
+        run: python3 tools/test.py

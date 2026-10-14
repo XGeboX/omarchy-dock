@@ -1,0 +1,194 @@
+import QtQuick
+import QtTest
+import "../tests/fixtures/PreviousMotion.js" as Previous
+
+Item {
+    DockFixture { id: dock }
+    TestCase {
+        id: tests
+        name: "DockSurface"
+        when: dock.testPanel !== null && dock.testPanel !== undefined
+        property var panel: dock.testPanel
+
+        function enter(index) {
+            const item = panel.testIcon(index)
+            const p = item.mapToItem(panel.testFrame, item.width / 2, item.height / 2)
+            mouseMove(panel.testFrame, p.x, p.y)
+            tryCompare(panel, "hovering", true)
+            wait(400)
+            return item
+        }
+        function leave() {
+            mouseMove(panel.testFrame, 1, 1)
+            tryCompare(panel, "hovering", false)
+            wait(650)
+        }
+        function test_01_stationary() {
+            enter(2)
+            const before = JSON.stringify(panel.geometry)
+            wait(250)
+            compare(JSON.stringify(panel.geometry), before)
+            verify(panel.testTip.shown)
+            leave()
+            compare(panel.motionState.strength, 0)
+        }
+        function test_02_pointer_event_updates_geometry() {
+            enter(1)
+            const target = panel.testIcon(3)
+            const pos = target.mapToItem(panel.testFrame, target.width / 2, target.height / 2)
+            mouseMove(panel.testFrame, pos.x, pos.y, 0)
+            compare(panel.motionState.center, panel.pointerX)
+            compare(panel.geometry.items[3].width, target.size)
+            leave()
+        }
+        function test_02_horizontal_sweep_reduces_shelf_drift() {
+            enter(1)
+            let low = Infinity, high = -Infinity, oldLow = Infinity, oldHigh = -Infinity
+            for (let x = 20; x <= panel.restWidth - 20; x += 8) {
+                mouseMove(panel.testFrame, (panel.width - panel.restWidth) / 2 + x, panel.height - 35, 0)
+                const middle = panel.geometry.left + panel.geometry.width / 2
+                const previous = Previous.layout(dock.apps.length, dock.minimizedAddresses.length,
+                    panel.iconSize, panel.gap, panel.pad, dock.magnification, x, panel.motionState.strength, panel.width)
+                const oldMiddle = previous.left + previous.width / 2
+                low = Math.min(low, middle); high = Math.max(high, middle)
+                oldLow = Math.min(oldLow, oldMiddle); oldHigh = Math.max(oldHigh, oldMiddle)
+            }
+            verify(high - low <= (oldHigh - oldLow) * 0.55)
+            leave()
+        }
+        function test_02_click_does_not_drag() {
+            const item = enter(1)
+            const before = dock.activations
+            mouseClick(item, item.width / 2, item.height / 2)
+            compare(dock.activations, before + 1)
+            compare(dock.dragCls, "")
+            leave()
+        }
+        function test_03_launch_lands_smoothly() {
+            const item = panel.testIcon(0)
+            item.running = false
+            item.bounce()
+            wait(110)
+            verify(item.hop > 0)
+            const before = item.hop
+            item.running = true
+            verify(item.hop > 0 && item.hop <= before)
+            wait(160)
+            compare(item.hop, 0)
+            item.running = false
+        }
+        function test_04_drag_and_land() {
+            const item = enter(2)
+            mousePress(item, item.width / 2, item.height / 2)
+            const p = item.mapToItem(panel.testFrame, item.width / 2, item.height / 2)
+            mouseMove(panel.testFrame, p.x + 65, p.y)
+            wait(130)
+            compare(dock.dragCls, item.modelData)
+            compare(panel.motionState.strength, 0)
+            mouseRelease(panel.testFrame, p.x + 65, p.y)
+            wait(240)
+            compare(dock.dragCls, "")
+            leave()
+        }
+        function test_05_menu_freezes_wave() {
+            const item = enter(0)
+            mouseClick(item, item.width / 2, item.height / 2, Qt.RightButton)
+            verify(panel.testMenu.visible)
+            const before = JSON.stringify(panel.motionState)
+            mouseMove(panel.testFrame, 1, 1)
+            wait(250)
+            compare(JSON.stringify(panel.motionState), before)
+            verify(!panel.testTip.shown)
+            panel.testMenu.visible = false
+            leave()
+        }
+        function test_06_restore_uses_workspace_selectors() {
+            const cases = [
+                { workspace: { id: 3, name: "3" }, selector: "3" },
+                { workspace: { id: -1337, name: "review-workspace" }, selector: "name:review-workspace" },
+                { workspace: { id: -1338, name: 'review "quoted"' }, selector: 'name:review "quoted"' },
+                { workspace: null, selector: "1" }
+            ]
+            for (const data of cases) {
+                dock.fixtureMonitor = { activeWorkspace: data.workspace }
+                dock.dispatches = []
+                dock.restoreWindow({ address: "beef" })
+                compare(dock.dispatches[0], 'hl.dsp.window.move({ window = "address:0xbeef", workspace = '
+                    + JSON.stringify(data.selector) + ', follow = true })')
+                compare(dock.dispatches[1], 'hl.dsp.focus({ window = "address:0xbeef" })')
+            }
+            dock.fixtureMonitor = null
+        }
+        function test_06_render_capture() {
+            enter(2)
+            const shot = grabImage(panel.testFrame)
+            verify(shot.width > 0 && shot.height > 0)
+            shot.save('__HOVER_IMAGE__')
+            leave()
+            grabImage(panel.testFrame).save('__REST_IMAGE__')
+        }
+        function test_07_narrow_drop_preserves_size() {
+            const originalPins = dock.fixturePins.slice()
+            panel.modelData = { width: 768, name: "fixture" }
+            dock.windows = Array.from({ length: 9 }, (_, i) => ({ cls: "fixture" + i, minimized: false, tl: {} }))
+            wait(400)
+            compare(panel.iconSize, 46)
+            panel.beginDrag(dock.apps[0], 0)
+            dock.dragOut = true
+            dock.endDrag(true)
+            compare(panel.iconSize, 46)
+            wait(110)
+            compare(panel.iconSize, 46)
+            wait(400)
+            compare(panel.iconSize, 49)
+            dock.fixturePins = originalPins
+            dock.windows = []
+            panel.modelData = { width: 1000, name: "fixture" }
+            wait(400)
+        }
+        function test_08_tooltip_tracks_label() {
+            const item = enter(0)
+            item.label = "First title"
+            compare(panel.testTip.label, "First title")
+            item.label = "Updated title"
+            compare(panel.testTip.label, "Updated title")
+            leave()
+        }
+        function test_09_tooltip_tracks_replaced_slot() {
+            enter(1)
+            const originalPins = dock.fixturePins.slice()
+            const changed = originalPins.slice()
+            const saved = changed[1]
+            changed[1] = changed[2]
+            changed[2] = saved
+            dock.fixturePins = changed
+            wait(40)
+            compare(panel.testTip.item, panel.hoveredIcon())
+            compare(panel.testTip.label, panel.hoveredIcon().label)
+            leave()
+            dock.fixturePins = originalPins
+            wait(100)
+        }
+        function test_10_tooltip_tracks_minimized_removal() {
+            panel.width = 1000
+            dock.fixtureMagnify = false
+            const cls = dock.apps[0]
+            dock.windows = ["A", "B", "C"].map(name => ({ cls: cls, minimized: true, tl: { address: name, title: name } }))
+            wait(100)
+            const b = panel.testMinIcon(1)
+            const p = b.mapToItem(panel.testFrame, 42, b.height / 2)
+            mouseMove(panel.testFrame, p.x, p.y)
+            wait(250)
+            const originalIndex = panel.hoverIndex
+            verify(panel.testTip.label.endsWith("B"))
+            dock.windows = dock.windows.slice(1)
+            wait(100)
+            compare(panel.hoverIndex, originalIndex)
+            verify(panel.testTip.label.endsWith("C"))
+            compare(panel.testTip.item, panel.testMinIcon(1))
+            leave()
+            dock.windows = []
+            dock.fixtureMagnify = true
+        }
+    }
+}
