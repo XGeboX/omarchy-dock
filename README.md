@@ -13,6 +13,12 @@ Preview rendered from the dock with neutral test icons. Your desktop uses the ic
 - Resize the dock by dragging its divider vertically.
 - Fit each screen independently without changing your saved icon size.
 
+## Linux desktop development
+
+The `0.7.0-dev` candidate adds a standalone launcher and native desktop integrations. The published `0.6.1` release targets Omarchy. The new integrations are experimental until their desktop checks pass; this is not yet a universal Linux release.
+
+See [Linux setup, compatibility and checks](docs/linux.md) before trying the candidate. Your existing dock is not replaced by cloning this repository.
+
 ## Requirements
 
 Omarchy with its Quickshell shell and plugin API. This release was checked with Omarchy 4.0.4, Hyprland 0.56.2 and Quickshell 0.3.1. It uses Omarchy's theme singleton and Hyprland's Lua dispatch interface.
@@ -31,7 +37,7 @@ Activation registers `xgebox.dock`, backs up existing preferences, and asks the 
 
 ## AUR package
 
-The package recipe is in [`packaging/aur/`](packaging/aur/). After the package is submitted to AUR:
+The package is not available from AUR yet. The package recipe is in [`packaging/aur/`](packaging/aur/). After the package is submitted to AUR:
 
 ```bash
 yay -S omarchy-dock
@@ -42,7 +48,7 @@ The package installs shared source under `/usr/share/omarchy-dock`. Activation i
 
 ## Configure
 
-Right-click a running app to pin it. Preferences are stored in `~/.config/omarchy-dock/config.json` and survive disabling or upgrading the dock. A new installation starts with no pinned apps.
+Right-click a running app to pin it. Preferences are stored in `$XDG_CONFIG_HOME/omarchy-dock/config.json` (default `~/.config/omarchy-dock/config.json`) and survive disabling or upgrading the dock. A new installation starts with no pinned apps.
 
 ```json
 {
@@ -68,7 +74,7 @@ For a Git checkout, use `./bin/omarchy-dock` instead of `omarchy-dock`.
 
 ## Tests
 
-From the source checkout on Arch, install `python`, `qt6-declarative` and `qt6-svg`, then run:
+From the source checkout on Arch, install `python`, `python-gobject`, `nodejs`, `qt6-declarative` and `qt6-svg`, then run:
 
 ```bash
 python3 tools/test.py

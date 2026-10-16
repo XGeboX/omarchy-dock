@@ -1,27 +1,10 @@
-// Omarchy Dock: a themed application dock running inside the Omarchy shell.
-//
-// WHY A PLUGIN: it runs inside the long-lived omarchy-shell process and reads
-// the same Color singleton as the bar, so it follows every Omarchy theme switch
-// with no colours of its own to keep in step.
-//
-// WHY "special:minimized": Hyprland has no minimize. A minimized window is moved,
-// without following, to a special workspace nobody toggles, which hides it; the
-// dock lists that workspace's windows to the right of the divider and restoring
-// moves the window back to the active workspace.
-//
-// Dispatch strings are Lua: under hyprland.lua, "dispatch X" becomes
-// hl.dispatch(X), so every action below is an hl.dsp.* expression, the same
-// form Omarchy's own scripts use.
-//
-// Developed by Anirudh Sharma, 30-09-2026.
+// Developed by Anirudh Sharma. Shared dock surface for Omarchy and standalone sessions.
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
-import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Widgets
-import qs.Commons
 import "DockMotion.js" as Motion
 
 Scope {
@@ -32,15 +15,29 @@ Scope {
     property var manifest
     property string omarchyPath
 
-    readonly property string minimizedWorkspace: "special:minimized"
+    property string backendName: "Omarchy"
+    readonly property var backend: platform.item
+    readonly property var palette: backend && backend.palette ? backend.palette : fallbackPalette
+    QtObject {
+        id: fallbackPalette
+        property color background: "#202428"
+        property color foreground: "#ecedef"
+        property color accent: "#a1c4d8"
+        property color urgent: "#ef8484"
+    }
+    Loader {
+        id: platform
+        source: "backends/" + root.backendName + ".qml"
+        onStatusChanged: if (status === Loader.Error) console.error("Dock backend could not load: " + root.backendName)
+    }
     // Outside the plugin directory on purpose: the shell reloads a plugin whenever
     // anything in its directory changes, so a config kept there would reload the
     // whole dock every time an app was pinned.
-    readonly property string configPath: Quickshell.env("HOME") + "/.config/omarchy-dock/config.json"
+    readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/omarchy-dock/config.json"
 
     // --- geometry ------------------------------------------------------------------------
     readonly property real iconSize: Math.max(32, Math.min(96, config.iconSize))
-    readonly property real magnification: config.magnify ? Math.max(1.0, Math.min(2.2, config.magnification)) : 1.0
+    readonly property real magnification: config.magnify && !config.reducedMotion ? Math.max(1.0, Math.min(2.2, config.magnification)) : 1.0
     readonly property real pad: Math.round(iconSize * 0.18)
     readonly property real gap: Math.round(iconSize * 0.14)
     readonly property real dotSpace: 8
@@ -63,6 +60,7 @@ Scope {
             property real iconSize: 52
             property real magnification: 1.55
             property bool magnify: true
+            property bool reducedMotion: false
         }
     }
 
@@ -85,31 +83,7 @@ Scope {
     }
 
     // --- the window model ------------------------------------------------------------
-    function classOf(t) {
-        const o = t.lastIpcObject
-        if (o && o["class"]) return o["class"]
-        if (t.wayland && t.wayland.appId) return t.wayland.appId
-        return ""
-    }
-
-    function isMinimized(t) {
-        return !!(t.workspace && t.workspace.name === root.minimizedWorkspace)
-    }
-
-    // Every window Hyprland has, as { tl, cls, minimized }. Reading the toplevels,
-    // their workspaces and their classes inside this binding is what makes the dock
-    // update when a window opens, closes or moves.
-    readonly property var windows: {
-        const out = []
-        const list = Hyprland.toplevels.values
-        for (let i = 0; i < list.length; i++) {
-            const t = list[i]
-            const cls = classOf(t)
-            if (!cls) continue
-            out.push({ tl: t, cls: cls, minimized: isMinimized(t) })
-        }
-        return out
-    }
+    readonly property var windows: backend ? backend.windows : []
 
     function windowsOf(cls) {
         return root.windows.filter(w => w.cls === cls)
@@ -132,7 +106,7 @@ Scope {
     readonly property var apps: appsFor(config.pinned)
     function appsFor(pinned) {
         const out = []
-        const seen = {}
+        const seen = Object.create(null)
         const p = pinned || []
         for (let i = 0; i < p.length; i++) {
             const e = p[i]
@@ -183,8 +157,9 @@ Scope {
     IpcHandler {
         target: "omarchy-dock"
         function motionProfile(): string {
-            return JSON.stringify({ version: "0.6.1", tracking: "pointer-event",
-                artwork: "theme-image", icons: "original", positioning: "reduced-drift" })
+            return JSON.stringify({ version: "0.7.0-dev", tracking: "pointer-event",
+                artwork: "theme-image", icons: "original", positioning: "reduced-drift", backend: root.backendName,
+                windowControls: !!root.backend && !root.backend.errorText })
         }
     }
 
@@ -198,30 +173,13 @@ Scope {
     // --- actions ---------------------------------------------------------------------------
     function address(t) {
         const a = String(t.address || "")
-        return a.indexOf("0x") === 0 ? a : "0x" + a
+        return a
     }
 
-    function focusWindow(t) {
-        Hyprland.dispatch('hl.dsp.focus({ window = "address:' + address(t) + '" })')
-    }
-
-    function minimizeWindow(t) {
-        Hyprland.dispatch('hl.dsp.window.move({ window = "address:' + address(t) + '", workspace = "'
-            + root.minimizedWorkspace + '", follow = false })')
-    }
-
-    function restoreWindow(t) {
-        const mon = Hyprland.focusedMonitor
-        const ws = mon && mon.activeWorkspace
-        const selector = ws && ws.id > 0 ? String(ws.id) : ws && ws.name ? "name:" + ws.name : "1"
-        Hyprland.dispatch('hl.dsp.window.move({ window = "address:' + address(t) + '", workspace = '
-            + JSON.stringify(selector) + ', follow = true })')
-        focusWindow(t)
-    }
-
-    function closeWindow(t) {
-        Hyprland.dispatch('hl.dsp.window.close({ window = "address:' + address(t) + '" })')
-    }
+    function focusWindow(t) { if (backend) backend.focusWindow(t) }
+    function minimizeWindow(t) { if (backend) backend.minimizeWindow(t) }
+    function restoreWindow(t) { if (backend) backend.restoreWindow(t) }
+    function closeWindow(t) { if (backend) backend.closeWindow(t) }
 
     function quitApp(cls) {
         const ws = windowsOf(cls)
@@ -240,9 +198,10 @@ Scope {
         }
         const e = entryFor(cls, pin)
         const id = (pin && pin.desktop) || (e && e.id) || cls
-        // uwsm-app is how Omarchy launches apps, so they land in the session's
-        // own scopes exactly as if launched from its menu.
-        Quickshell.execDetached(["uwsm-app", "--", String(id).replace(/\.desktop$/, "") + ".desktop"])
+        if (backendName === "Omarchy")
+            Quickshell.execDetached(["uwsm-app", "--", String(id).replace(/\.desktop$/, "") + ".desktop"])
+        else if (e) e.execute()
+        else console.warn("No desktop entry for application: " + cls)
     }
 
     // Left-click on an app: focus it, restore it if every window is minimized, or
@@ -303,7 +262,7 @@ Scope {
     // in it are the visible positions, which a raw list with a duplicate or a skipped entry
     // breaks: with pins [a, a, b, c], dropping c back on its own slot rewrote the order.
     function pinsShown() {
-        const out = [], seen = {}
+        const out = [], seen = Object.create(null)
         const p = config.pinned || []
         for (let i = 0; i < p.length; i++) {
             const e = p[i]
@@ -341,7 +300,7 @@ Scope {
         const after = appsFor(pinnedAfterDrop())
         const slot = iconSize + gap
         const half = (apps.length - after.length) * slot / 2
-        const shift = {}
+        const shift = Object.create(null)
         for (let i = 0; i < apps.length; i++) {
             const j = after.indexOf(apps[i])
             shift[apps[i]] = j < 0 ? 0 : (j - i) * slot + half
@@ -425,11 +384,12 @@ Scope {
     }
 
     function runAction(id, cls, addr) {
-        const w = addr ? windowAt(addr) : null
+        const candidate = addr ? windowAt(addr) : null
+        const w = candidate && candidate.cls === cls ? candidate : null
         const ws = windowsOf(cls)
         if (id.indexOf("win:") === 0) {
             const picked = windowAt(id.slice(4))
-            if (picked) {
+            if (picked && picked.cls === cls) {
                 if (picked.minimized) restoreWindow(picked.tl)
                 else focusWindow(picked.tl)
             }
@@ -445,18 +405,6 @@ Scope {
         case "quit": quitApp(cls); break
         }
     }
-
-    // lastIpcObject is only as fresh as the last fetch, so refresh on the events that
-    // change what the dock shows.
-    Connections {
-        target: Hyprland
-        function onRawEvent(event) {
-            const n = event.name
-            if (n === "openwindow" || n === "closewindow" || n === "movewindow" || n === "movewindowv2")
-                Hyprland.refreshToplevels()
-        }
-    }
-    Component.onCompleted: Hyprland.refreshToplevels()
 
     // --- the dock, one per screen --------------------------------------------------------------
     Variants {
@@ -494,8 +442,10 @@ Scope {
             implicitHeight: restHeight + root.bottomGap + root.lift
             exclusiveZone: restHeight + root.bottomGap
             mask: Region { item: zone }
+            //@ if env("OMARCHY_DOCK_BACKEND") !== "x11"
             WlrLayershell.namespace: "omarchy-dock"
             WlrLayershell.layer: WlrLayer.Top
+            //@ endif
 
             property real pointerSceneX: 0
             property real pointerSceneY: 0
@@ -705,9 +655,9 @@ Scope {
                         height: panel.restHeight
                         radius: Math.round(panel.iconSize * 0.28)
                         // Translucent theme background; Hyprland blurs what shows through it.
-                        color: Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 0.46)
+                        color: Qt.rgba(root.palette.background.r, root.palette.background.g, root.palette.background.b, 0.46)
                         border.width: 1
-                        border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.14)
+                        border.color: Qt.rgba(root.palette.foreground.r, root.palette.foreground.g, root.palette.foreground.b, 0.14)
 
                         // The glass sheen: a soft highlight along the top edge.
                         Rectangle {
@@ -735,6 +685,8 @@ Scope {
                                 // being destroyed and rebuilt, which would flash every icon.
                                 model: ScriptModel { values: root.apps }
                                 DockIcon {
+                                    palette: root.palette
+                                    reducedMotion: config.reducedMotion
                                     id: appIcon
                                     required property string modelData
                                     required property int index
@@ -788,7 +740,7 @@ Scope {
                                     anchors.centerIn: parent
                                     width: 1
                                     height: parent.height * 0.62
-                                    color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, resize.containsMouse || resize.pressed ? 0.55 : 0.26)
+                                    color: Qt.rgba(root.palette.foreground.r, root.palette.foreground.g, root.palette.foreground.b, resize.containsMouse || resize.pressed ? 0.55 : 0.26)
                                 }
                                 MouseArea {
                                     id: resize
@@ -823,6 +775,8 @@ Scope {
                                 id: minRepeater
                                 model: ScriptModel { values: root.minimizedAddresses }
                                 DockIcon {
+                                    palette: root.palette
+                                    reducedMotion: config.reducedMotion
                                     id: minIcon
                                     required property string modelData
                                     required property int index
@@ -875,15 +829,15 @@ Scope {
                     y: item ? Math.max(0, panel.height - root.bottomGap - panel.pad - root.dotSpace
                         - item.size - item.hop - height - 10) : 0
                     radius: 7
-                    color: Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 0.92)
+                    color: Qt.rgba(root.palette.background.r, root.palette.background.g, root.palette.background.b, 0.92)
                     border.width: 1
-                    border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.14)
+                    border.color: Qt.rgba(root.palette.foreground.r, root.palette.foreground.g, root.palette.foreground.b, 0.14)
                     Text {
                         id: tip
                         anchors.centerIn: parent
                         width: parent.width - 20
                         text: tooltip.label
-                        color: Color.foreground
+                        color: root.palette.foreground
                         font.pixelSize: 12
                         font.weight: Font.Medium
                         elide: Text.ElideRight
@@ -917,23 +871,41 @@ Scope {
                     width: removeText.implicitWidth + 20
                     height: removeText.implicitHeight + 10
                     radius: height / 2
-                    color: Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 0.92)
+                    color: Qt.rgba(root.palette.background.r, root.palette.background.g, root.palette.background.b, 0.92)
                     border.width: 1
-                    border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.14)
+                    border.color: Qt.rgba(root.palette.foreground.r, root.palette.foreground.g, root.palette.foreground.b, 0.14)
                     Text {
                         id: removeText
                         anchors.centerIn: parent
                         text: "Remove"
-                        color: Color.foreground
+                        color: root.palette.foreground
                         font.pixelSize: 12
                         font.weight: Font.Medium
                     }
                 }
             }
 
+            Rectangle {
+                visible: !!root.backend && !!root.backend.errorText
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: 4
+                width: serviceError.implicitWidth + 24
+                height: serviceError.implicitHeight + 16
+                radius: 8
+                color: root.palette.background
+                Text {
+                    id: serviceError
+                    anchors.centerIn: parent
+                    text: root.backend ? root.backend.errorText : ""
+                    color: root.palette.foreground
+                    font.pixelSize: 12
+                }
+            }
+
             // --- right-click menu ------------------------------------------------------------
             PopupWindow {
                 id: menu
+                grabFocus: true
                 property string cls: ""
                 property string addr: ""     // set for a minimized-window icon
                 // A snapshot taken when the menu opens. Binding the list to live state
@@ -961,21 +933,15 @@ Scope {
                     menu.visible = true
                 }
 
-                HyprlandFocusGrab {
-                    windows: [menu]
-                    active: menu.visible
-                    onCleared: menu.visible = false
-                }
-
                 Rectangle {
                     id: menuBox
                     // Wide enough for a window title, never so wide a long one swamps the screen.
                     implicitWidth: Math.min(360, Math.max(200, col.implicitWidth + 12))
                     implicitHeight: col.implicitHeight + 12
                     radius: 12
-                    color: Qt.rgba(Color.background.r, Color.background.g, Color.background.b, 0.94)
+                    color: Qt.rgba(root.palette.background.r, root.palette.background.g, root.palette.background.b, 0.94)
                     border.width: 1
-                    border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.14)
+                    border.color: Qt.rgba(root.palette.foreground.r, root.palette.foreground.g, root.palette.foreground.b, 0.14)
 
                     ColumnLayout {
                         id: col
@@ -989,7 +955,7 @@ Scope {
                             Layout.topMargin: 2
                             Layout.bottomMargin: 3
                             text: root.nameFor(menu.cls)
-                            color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.5)
+                            color: Qt.rgba(root.palette.foreground.r, root.palette.foreground.g, root.palette.foreground.b, 0.5)
                             font.pixelSize: 11
                             font.weight: Font.DemiBold
                             elide: Text.ElideRight
@@ -1003,14 +969,14 @@ Scope {
                                 implicitWidth: modelData.sep ? 0 : rowText.implicitWidth + 36
                                 implicitHeight: modelData.sep ? 9 : 30
                                 radius: 7
-                                color: !modelData.sep && hover.containsMouse ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.22) : "transparent"
+                                color: !modelData.sep && hover.containsMouse ? Qt.rgba(root.palette.accent.r, root.palette.accent.g, root.palette.accent.b, 0.22) : "transparent"
                                 // A hairline between the window list and the app's actions.
                                 Rectangle {
                                     visible: !!modelData.sep
                                     anchors.centerIn: parent
                                     width: parent.width - 16
                                     height: 1
-                                    color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.14)
+                                    color: Qt.rgba(root.palette.foreground.r, root.palette.foreground.g, root.palette.foreground.b, 0.14)
                                 }
                                 // Reserve a mark column on every row so the
                                 // titles line up whether or not a row carries a mark.
@@ -1020,7 +986,7 @@ Scope {
                                     anchors.left: parent.left
                                     anchors.leftMargin: 9
                                     text: modelData.mark || ""
-                                    color: Color.foreground
+                                    color: root.palette.foreground
                                     font.pixelSize: 12
                                 }
                                 Text {
@@ -1031,7 +997,7 @@ Scope {
                                     anchors.leftMargin: 26
                                     width: Math.min(implicitWidth, parent.width - 36)
                                     text: modelData.text || ""
-                                    color: modelData.danger ? Color.urgent : Color.foreground
+                                    color: modelData.danger ? root.palette.urgent : root.palette.foreground
                                     font.pixelSize: 13
                                     elide: Text.ElideRight
                                 }
@@ -1064,6 +1030,8 @@ Scope {
     // Inline components cannot see this file's ids, so everything they need is passed in.
     component DockIcon: Item {
         id: icon
+        required property var palette
+        property bool reducedMotion: false
         property real baseSize: 52
         property real dotSpace: 8
         property string iconSource
@@ -1099,7 +1067,7 @@ Scope {
 
         property real hop: 0
         function bounce() {
-            if (!running && !held) {
+            if (!running && !held && !reducedMotion) {
                 land.stop()
                 hopAnim.restart()
             }
@@ -1161,10 +1129,10 @@ Scope {
             radius: 2
             visible: icon.running || icon.minimizedStyle
             color: icon.minimizedStyle ? "transparent"
-                : icon.active ? Color.accent
-                : Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.8)
+                : icon.active ? icon.palette.accent
+                : Qt.rgba(icon.palette.foreground.r, icon.palette.foreground.g, icon.palette.foreground.b, 0.8)
             border.width: icon.minimizedStyle ? 1 : 0
-            border.color: Qt.rgba(Color.foreground.r, Color.foreground.g, Color.foreground.b, 0.75)
+            border.color: Qt.rgba(icon.palette.foreground.r, icon.palette.foreground.g, icon.palette.foreground.b, 0.75)
         }
 
         MouseArea {

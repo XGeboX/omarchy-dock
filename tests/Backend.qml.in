@@ -1,0 +1,37 @@
+import QtQuick
+import QtTest
+Item {
+    WlrFixture { id: backend }
+    TestCase {
+        name: "WlrModel"
+        function initTestCase() { failOnWarning(/Binding loop/) }
+        function test_identities_and_live_updates() {
+            compare(backend.windows.length, 2)
+            const firstId = backend.windows[0].tl.address
+            const secondId = backend.windows[1].tl.address
+            backend.fixtureFirst.title = "A changed"
+            backend.fixtureSecond.activated = true
+            compare(backend.windows[0].tl.title, "A changed")
+            verify(backend.windows[1].tl.activated)
+            backend.minimizeWindow(backend.windows[0].tl)
+            verify(backend.windows[0].minimized)
+            backend.restoreWindow(backend.windows[0].tl)
+            verify(!backend.fixtureFirst.minimized && backend.fixtureFirst.activated)
+            backend.fixtureToplevels = [backend.fixtureSecond, backend.fixtureThird]
+            compare(backend.windows.length, 2)
+            compare(backend.windows[0].tl.address, secondId)
+            verify(backend.windows[1].tl.address !== firstId && backend.windows[1].tl.address !== secondId)
+            backend.closeWindow(backend.windows[0].tl)
+            compare(backend.windows.length, 1)
+            backend.fixtureThird.appId = ""
+            compare(backend.windows.length, 0)
+            backend.fixtureThird.appId = "app.c"
+            compare(backend.windows.length, 1)
+            backend.fixtureToplevels = []
+            compare(backend.windows.length, 0)
+            backend.fixtureToplevels = [backend.fixtureFirst]
+            compare(backend.windows.length, 1)
+            verify(backend.windows[0].tl.address !== firstId && backend.windows[0].tl.address !== secondId)
+        }
+    }
+}

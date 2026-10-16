@@ -13,7 +13,7 @@ jobs:
     container: archlinux:base
     steps:
       - name: Install test dependencies
-        run: pacman -Syu --noconfirm git python qt6-declarative qt6-svg
+        run: pacman -Syu --noconfirm git python python-gobject nodejs qt6-declarative qt6-svg
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false

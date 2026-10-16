@@ -35,7 +35,8 @@ def command(args):
 
 def paths():
     home = Path.home()
-    return home / '.config/omarchy/plugins' / PLUGIN_ID, home / '.config/omarchy-dock/config.json'
+    config_home = Path(os.environ.get('XDG_CONFIG_HOME') or home / '.config')
+    return home / '.config/omarchy/plugins' / PLUGIN_ID, config_home / 'omarchy-dock/config.json'
 
 
 def require_session():
@@ -50,7 +51,7 @@ def backup_preferences(config):
     existing = [path for path in candidates if path.exists()]
     if not existing:
         return
-    parent = Path.home() / '.local/state/omarchy-dock/backups'
+    parent = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'omarchy-dock/backups'
     parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-')
     backup = Path(tempfile.mkdtemp(prefix=stamp, dir=parent))
@@ -147,9 +148,11 @@ def status():
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Enable, disable or inspect the Omarchy Dock plugin.')
-    parser.add_argument('action', choices=['enable', 'disable', 'status'])
+    parser = argparse.ArgumentParser(description='Run the portable dock, install the GNOME extension, or manage the Omarchy plugin.')
+    parser.add_argument('action', choices=['enable', 'disable', 'status', 'run', 'doctor', 'install-gnome', 'disable-gnome'])
     args = parser.parse_args()
+    if args.action in ['run', 'doctor', 'install-gnome', 'disable-gnome']:
+        os.execv(sys.executable, [sys.executable, str(ROOT / 'tools/desktop.py'), args.action])
     try:
         {'enable': enable, 'disable': disable, 'status': status}[args.action]()
     except DockError as error:
