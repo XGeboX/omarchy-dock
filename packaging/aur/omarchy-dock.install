@@ -1,13 +1,18 @@
 post_install() {
   cat <<'MESSAGE'
-Omarchy Dock is installed. In your desktop session, run:
-  omarchy-dock enable
+Omarchy Dock is installed. Check the desktop adapter first:
+  omarchy-dock doctor
+Omarchy users: omarchy-dock enable
+Other supported desktops: omarchy-dock run
+GNOME users must first run: omarchy-dock install-gnome
 MESSAGE
 }
 
 post_upgrade() {
   cat <<'MESSAGE'
-To load the updated Omarchy Dock, run:
-  omarchy-dock enable
+Stop or disable the dock before loading an update.
+Omarchy users: omarchy-dock enable
+GNOME users: disable, install-gnome, then run
+Other supported desktops: restart omarchy-dock run
 MESSAGE
 }

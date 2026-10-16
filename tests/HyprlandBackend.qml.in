@@ -1,0 +1,42 @@
+import QtQuick
+import QtTest
+Item {
+    HyprlandFixture { id: backend }
+    TestCase {
+        name: "HyprlandBackend"
+        function test_lua_named_workspace_selectors() {
+            backend.fixtureLua = true
+            const cases = [
+                { workspace: { id: 3, name: "3" }, selector: "3" },
+                { workspace: { id: -1337, name: "review-workspace" }, selector: "name:review-workspace" },
+                { workspace: { id: -1338, name: 'review "quoted"' }, selector: 'name:review "quoted"' },
+                { workspace: null, selector: "1" }
+            ]
+            for (const data of cases) {
+                backend.fixtureMonitor = { activeWorkspace: data.workspace }
+                backend.dispatches = []
+                backend.restoreWindow({ address: "beef" })
+                compare(backend.dispatches[0], 'hl.dsp.window.move({ window = "address:0xbeef", workspace = '
+                    + JSON.stringify(data.selector) + ', follow = true })')
+                compare(backend.dispatches[1], 'hl.dsp.focus({ window = "address:0xbeef" })')
+            }
+        }
+        function test_window_title_event_refreshes_model() {
+            const before = backend.refreshes
+            backend.fixtureEvent("windowtitlev2")
+            compare(backend.refreshes, before + 1)
+        }
+        function test_legacy_window_actions() {
+            backend.fixtureLua = false
+            backend.fixtureMonitor = { activeWorkspace: { id: -12, name: "review workspace" } }
+            backend.dispatches = []
+            backend.restoreWindow({ address: "0xbeef" })
+            backend.minimizeWindow({ address: "beef" })
+            backend.closeWindow({ address: "beef" })
+            compare(backend.dispatches[0], 'movetoworkspace name:review workspace,address:0xbeef')
+            compare(backend.dispatches[1], 'focuswindow address:0xbeef')
+            compare(backend.dispatches[2], 'movetoworkspacesilent special:minimized,address:0xbeef')
+            compare(backend.dispatches[3], 'closewindow address:0xbeef')
+        }
+    }
+}

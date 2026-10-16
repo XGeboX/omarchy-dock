@@ -1,0 +1,16 @@
+.omarchy-dock-shelf {
+    background-color: rgba(32, 36, 40, 0.92);
+    border: 1px solid rgba(236, 237, 239, 0.16);
+    border-radius: 16px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+.omarchy-dock-dot { background-color: #ecedef; border-radius: 2px; }
+.omarchy-dock-dot-active { background-color: #a1c4d8; border-radius: 2px; }
+.omarchy-dock-tip {
+    color: #ecedef;
+    background-color: rgba(32, 36, 40, 0.96);
+    border: 1px solid rgba(236, 237, 239, 0.16);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 11pt;
+}

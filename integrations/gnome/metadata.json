@@ -1,0 +1,16 @@
+{
+  "uuid": "omarchy-dock@xgebox.github.io",
+  "name": "Omarchy Dock",
+  "description": "Application dock with coordinated magnification and native window controls.",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49",
+    "50",
+    "51"
+  ],
+  "url": "https://github.com/XGeboX/omarchy-dock",
+  "version": 1
+}

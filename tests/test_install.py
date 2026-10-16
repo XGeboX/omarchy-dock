@@ -21,6 +21,8 @@ class InstallTests(TestCase):
         self.home_patch.start()
         self.root_patch = patch.object(dock.os, 'geteuid', return_value=1000)
         self.root_patch.start()
+        self.env_patch = patch.dict(dock.os.environ, {'XDG_CONFIG_HOME': str(self.home / '.config'), 'XDG_STATE_HOME': str(self.home / '.local/state')})
+        self.env_patch.start()
         self.calls = []
 
         def command(args):
@@ -28,7 +30,7 @@ class InstallTests(TestCase):
             if args[-1] == 'ping':
                 return 'ok'
             if args[-1] == 'motionProfile':
-                return json.dumps({'version': '0.6.1', 'icons': 'original', 'positioning': 'reduced-drift'})
+                return json.dumps({'version': '0.7.0-dev', 'icons': 'original', 'positioning': 'reduced-drift'})
             if args[-1] == 'listPlugins':
                 return '[{"id":"xgebox.dock"}]'
             return ''
@@ -37,6 +39,7 @@ class InstallTests(TestCase):
         self.run_patch.start()
 
     def tearDown(self):
+        self.env_patch.stop()
         self.run_patch.stop()
         self.root_patch.stop()
         self.home_patch.stop()
@@ -129,7 +132,7 @@ class InstallTests(TestCase):
             if args[-2:] == ['enable', 'xgebox.dock'] and len(registrations) < 3:
                 raise dock.DockError('plugin unknown before scan finishes')
             if args[-1] == 'motionProfile':
-                return '{"version":"0.6.1"}'
+                return '{"version":"0.7.0-dev"}'
             return ''
 
         with patch.object(dock, 'command', side_effect=delayed), patch.object(dock.time, 'sleep'):
@@ -160,6 +163,18 @@ class InstallTests(TestCase):
                 dock.enable()
         self.assertEqual(config.read_text(), '{broken')
         self.assertNotIn(['omarchy', 'plugin', 'enable', 'xgebox.dock'], self.calls)
+
+    def test_custom_config_root_is_initialized_and_backed_up(self):
+        custom = self.home / 'custom-config'
+        with patch.dict(dock.os.environ, {'XDG_CONFIG_HOME': str(custom)}):
+            dock.enable()
+            config = custom / 'omarchy-dock/config.json'
+            self.assertTrue(config.is_file())
+            dock.enable()
+            backups = list((self.home / '.local/state/omarchy-dock/backups').glob('*/config.json'))
+            self.assertTrue(backups)
+            self.assertEqual(backups[0].read_bytes(), config.read_bytes())
+        self.assertFalse((self.home / '.config/omarchy-dock/config.json').exists())
 
     def test_root_activation_is_refused(self):
         with patch.object(dock.os, 'geteuid', return_value=0):
