@@ -95,13 +95,18 @@ class Plasma:
         if index < 0:
             raise RuntimeError('KWin refused the dock script')
         self.scripts.append(name)
-        script = dbus.Interface(self.bus.get_object('org.kde.KWin', '/Scripting/Script' + str(index)), 'org.kde.kwin.Script')
-        script.run(timeout=3)
-        if not persistent:
-            self.scripting.unloadScript(name, timeout=3)
-            self.scripts.remove(name)
-            # Action scripts contain no user data, and are reused to avoid an unbounded cache.
-            path.write_text('')
+        try:
+            script = dbus.Interface(self.bus.get_object('org.kde.KWin', '/Scripting/Script' + str(index)), 'org.kde.kwin.Script')
+            script.run(timeout=3)
+        finally:
+            if not persistent:
+                self.unload(name)
+                # Action scripts contain no user data, and are reused to avoid an unbounded cache.
+                path.write_text('')
+
+    def unload(self, name):
+        self.scripting.unloadScript(name, timeout=3)
+        self.scripts.remove(name)
 
     def poll(self):
         context = self.glib.MainContext.default()
@@ -112,9 +117,15 @@ class Plasma:
         self.load(kwin_action(identifier, action))
 
     def close(self):
-        for name in self.scripts:
-            self.scripting.unloadScript(name, timeout=3)
+        failure = None
+        for name in list(self.scripts):
+            try:
+                self.unload(name)
+            except Exception as error:
+                failure = failure or error
         self.receiver.remove_from_connection()
+        if failure is not None:
+            raise failure
 
 
 def sway_windows(tree):

@@ -125,4 +125,90 @@ repeatPanel.press({entry: {key: 'next'}}, {get_button: () => 1, get_coords: () =
 assert.equal(destroyed, true);
 assert.equal(repeatPanel.landing, null, 'A new drag must cancel the previous landing');
 
+const queued = [];
+context.GLib = {PRIORITY_DEFAULT_IDLE: 0, SOURCE_REMOVE: false,
+    idle_add: (_priority, callback) => { queued.push(callback); return queued.length; }};
+const resizing = new context.Dock();
+resizing.config = {pinned: [], iconSize: 64, magnification: 1.55};
+resizing.resize = {size: 52};
+resizing.file = {query_exists: () => true, load_contents: () => [true,
+    new TextEncoder().encode(JSON.stringify({pinned: [{class: 'external'}], iconSize: 52, magnification: 1.8}))]};
+resizing.sync = () => {};
+let saved;
+resizing.save = () => { saved = {...resizing.config}; };
+resizing.schedule(true);
+queued.shift()();
+assert.equal(resizing.config.iconSize, 64, 'A pending preferences reload must not undo a resize');
+resizing.event({type: () => 2, get_button: () => 1});
+assert.equal(saved.iconSize, 64, 'Release must save the size selected by the gesture');
+assert.equal(saved.magnification, 1.8, 'Unrelated external preference changes must survive');
+assert.equal(saved.pinned[0].class, 'external');
+
+for (const [shownSize, externalSize, dropY] of [[52, 96], [96, 32], [32, 80], [96, 52, 500]]) {
+    const changing = new context.Dock();
+    const pins = ['a', 'b', 'c', 'd'].map(cls => ({class: cls, desktop: cls}));
+    changing.config = {pinned: pins, iconSize: shownSize, magnification: 1.55};
+    const displayed = Object.create(context.Panel.prototype);
+    displayed.owner = changing;
+    displayed.monitor = {x: 0, y: 0, width: 1207, height: 720};
+    displayed.entries = pins.map(pin => ({cls: pin.class, pin}));
+    const size = displayed.size(), gap = Motion.metric(size, 0.14), pad = Motion.metric(size, 0.18);
+    displayed.geometry = {restWidth: Motion.restWidth(4, size, gap, pad)};
+    changing.press = {panel: displayed, entry: {cls: 'a', app: {get_id: () => 'a.desktop'}}};
+    changing.drag = {x: (displayed.monitor.width - displayed.geometry.restWidth) / 2 + pad + size / 2 + 3 * (size + gap),
+        y: dropY ?? displayed.monitor.height - displayed.restHeight() / 2};
+    changing.file = {query_exists: () => true, load_contents: () => [true, new TextEncoder().encode(JSON.stringify({
+        pinned: pins.map(pin => ({...pin, name: 'Fresh ' + pin.class})), iconSize: externalSize, magnification: 1.8}))]};
+    changing.sync = () => {};
+    changing.save = () => {};
+    changing.schedule(true);
+    queued.shift()();
+    changing.event({type: () => 2, get_button: () => 1});
+    assert.deepEqual(Array.from(changing.config.pinned, pin => pin.class), ['b', 'c', 'd', 'a'],
+        'Drop slots must use the geometry displayed before queued preferences reload');
+    assert.equal(changing.config.iconSize, externalSize, 'The external size edit must survive the drag');
+    assert.equal(changing.config.pinned.at(-1).name, 'Fresh a', 'Fresh pin metadata must survive the drag');
+}
+
 console.log('Native desktop model checks passed');
+
+class Signal {
+    constructor() { this.handlers = []; }
+    connect(handler) { this.handlers.push(handler); }
+    emit(...args) { this.handlers.slice().forEach(handler => handler(...args)); }
+}
+function kwinWindow(id) {
+    return {resourceClass: 'fixture.' + id, internalId: id, caption: id, minimized: false,
+        minimizedChanged: new Signal(), captionChanged: new Signal(), windowClassChanged: new Signal(), skipTaskbarChanged: new Signal()};
+}
+const firstWindow = kwinWindow('one'), nextWindow = kwinWindow('two');
+let nativeWindows = [firstWindow], ownerAlive = true;
+const updates = [], unloads = [], timers = [];
+const workspace = {windowList: () => nativeWindows, activeWindow: firstWindow,
+    windowAdded: new Signal(), windowRemoved: new Signal(), windowActivated: new Signal()};
+const watcher = vm.createContext({workspace, dockOwner: ':1.fixture', dockScript: 'fixture-watcher',
+    QTimer: class {
+        constructor() { this.timeout = new Signal(); timers.push(this); }
+        start() { this.running = true; }
+        stop() { this.running = false; }
+    },
+    callDBus: (_service, _path, _interface, method, argument, callback) => {
+        if (method === 'Update') updates.push(JSON.parse(argument));
+        else if (method === 'NameHasOwner') { assert.equal(argument, ':1.fixture'); callback(ownerAlive); }
+        else if (method === 'unloadScript') unloads.push(argument);
+    }});
+vm.runInContext(readFileSync(new URL('../integrations/plasma/windows.js', import.meta.url), 'utf8'), watcher);
+assert.equal(updates.at(-1)[0].tl.activated, true);
+nativeWindows.push(nextWindow); workspace.windowAdded.emit(nextWindow);
+assert.equal(updates.at(-1).length, 2);
+nextWindow.minimized = true; nextWindow.minimizedChanged.emit();
+assert.equal(updates.at(-1)[1].minimized, true);
+nextWindow.caption = 'Renamed fixture'; nextWindow.captionChanged.emit();
+assert.equal(updates.at(-1)[1].tl.title, 'Renamed fixture');
+nativeWindows = [nextWindow]; workspace.windowRemoved.emit(firstWindow);
+assert.equal(updates.at(-1).length, 1);
+timers[0].timeout.emit(); assert.equal(unloads.length, 0);
+ownerAlive = false; timers[0].timeout.emit();
+assert.deepEqual(unloads, ['fixture-watcher']);
+assert.equal(timers[0].running, false);
+console.log('Native KWin watcher checks passed');

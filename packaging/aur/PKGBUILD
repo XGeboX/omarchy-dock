@@ -18,7 +18,7 @@ optdepends=('omarchy>=4.0.4: native Omarchy shell integration'
 checkdepends=('qt6-declarative' 'qt6-svg' 'python-gobject' 'nodejs')
 install=omarchy-dock.install
 source=("$pkgname-$_sourcever.tar.gz::$url/releases/download/v$_sourcever/$pkgname-$_sourcever.tar.gz")
-sha256sums=('ab75f098da0adf2c4b0a3f9f3c5f7e9e626554a2b5c78315b1fa3fe53f8fc3ad')
+sha256sums=('3794f8cc649bd493dd199874f9c6d40925757638a0114118ceea384096606fa0')
 
 check() {
   cd "$srcdir/$pkgname-$_sourcever"

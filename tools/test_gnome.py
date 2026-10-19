@@ -15,12 +15,15 @@ ROOT = Path(__file__).resolve().parent.parent
 UUID = 'omarchy-dock@xgebox.github.io'
 
 
-def worker(stage, prefix):
+def worker(stage, prefix, monitors=False):
     children = []
     try:
         with (stage / 'compositor.log').open('w') as log:
-            shell = subprocess.Popen([str(prefix / 'usr/bin/gnome-shell'), '--headless', '--wayland',
-                '--no-x11', '--wayland-display', 'dock-test', '--virtual-monitor', '1280x720'], stdout=log, stderr=log)
+            command = [str(prefix / 'usr/bin/gnome-shell'), '--headless', '--wayland',
+                '--no-x11', '--wayland-display', 'dock-test', '--virtual-monitor', '1280x720']
+            if monitors:
+                command += ['--virtual-monitor', '800x600']
+            shell = subprocess.Popen(command, stdout=log, stderr=log)
             children.append(shell)
             deadline = time.monotonic() + 8
             while not (stage / 'runtime/dock-test').exists():
@@ -34,8 +37,13 @@ def worker(stage, prefix):
                 time.sleep(0.5)
                 command = str(prefix / 'usr/bin/gnome-extensions')
                 subprocess.run([command, 'enable', UUID], check=True, timeout=8, capture_output=True)
-                deadline = time.monotonic() + 15
+                deadline = time.monotonic() + 25
+                phase = ''
                 while not (stage / 'result.json').exists():
+                    requested = (stage / 'phase').read_text() if (stage / 'phase').exists() else ''
+                    if requested and requested != phase:
+                        configure_monitors(stage, requested)
+                        phase = requested
                     if shell.poll() is not None or time.monotonic() > deadline:
                         raise RuntimeError('Native GNOME checks did not finish')
                     time.sleep(0.1)
@@ -58,14 +66,37 @@ def worker(stage, prefix):
                     child.wait()
 
 
+def configure_monitors(stage, phase):
+    from gi.repository import Gio, GLib
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    service, path = 'org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig'
+    state = bus.call_sync(service, path, service, 'GetCurrentState', None, None,
+        Gio.DBusCallFlags.NONE, 5000, None).unpack()
+    monitors = state[1][:1] if phase == 'disconnect' else state[1]
+    configuration, x = [], 0
+    for index, (spec, modes, _properties) in enumerate(monitors):
+        mode = next((mode for mode in modes if mode[6].get('is-current')), modes[0])
+        scale = 1.25 if index == 0 else 1.0
+        if scale not in mode[5]:
+            raise AssertionError('The synthetic monitor does not support the requested scale')
+        configuration.append((x, 0, scale, 0, index == 0, [(spec[0], mode[0], {})]))
+        x += round(mode[1] / scale)
+    parameters = GLib.Variant('(uua(iiduba(ssa{sv}))a{sv})',
+        (state[0], 1, configuration, {'layout-mode': GLib.Variant('u', 1)}))
+    bus.call_sync(service, path, service, 'ApplyMonitorsConfig', parameters, None,
+        Gio.DBusCallFlags.NONE, 5000, None)
+    print('Synthetic monitor transition:', phase, 'scales:', [item[2] for item in configuration], flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description='Exercise the native dock in a private headless GNOME session')
     parser.add_argument('--prefix', type=Path, default=Path('/'))
+    parser.add_argument('--monitors', action='store_true', help='Exercise mixed scaling and monitor removal/reconnection')
     parser.add_argument('--worker', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     if args.worker:
-        worker(args.worker, args.prefix)
+        worker(args.worker, args.prefix, args.monitors)
         return
     stage = Path(tempfile.mkdtemp(prefix='dock-gnome-integration-'))
     for name in ['home', 'config', 'data', 'runtime', 'cache', 'state', 'schemas']:
@@ -88,7 +119,8 @@ def main():
     shutil.copytree(ROOT / 'integrations/gnome', extension)
     (extension / 'extension.js').rename(extension / 'dock.js')
     wrapper = (ROOT / 'tests/GnomeIntegration.js.in').read_text()
-    for key, value in {'__RESULT__': stage / 'result.json', '__IMAGE__': stage / 'gnome-dock.png'}.items():
+    wrapper = wrapper.replace('__MONITORS__', 'true' if args.monitors else 'false')
+    for key, value in {'__RESULT__': stage / 'result.json', '__IMAGE__': stage / 'gnome-dock.png', '__PHASE__': stage / 'phase'}.items():
         wrapper = wrapper.replace(key, json.dumps(str(value)))
     (extension / 'extension.js').write_text(wrapper)
     (stage / 'fixture.py').write_text('''import gi
@@ -121,10 +153,13 @@ app.run([])
             library / 'mutter-18', library / 'girepository-1.0'])), LIBGL_ALWAYS_SOFTWARE='1',
         GNOME_SHELL_DATADIR=str(args.prefix / 'usr/share/gnome-shell'), XDG_SESSION_TYPE='wayland', XDG_CURRENT_DESKTOP='GNOME')
     with (stage / 'session.log').open('w') as log:
-        process = subprocess.Popen(['dbus-run-session', '--', sys.executable, str(Path(__file__).resolve()),
-            '--prefix', str(args.prefix), '--worker', str(stage)], env=env, stdout=log, stderr=log, start_new_session=True)
+        command = ['dbus-run-session', '--', sys.executable, str(Path(__file__).resolve()),
+            '--prefix', str(args.prefix), '--worker', str(stage)]
+        if args.monitors:
+            command.append('--monitors')
+        process = subprocess.Popen(command, env=env, stdout=log, stderr=log, start_new_session=True)
         try:
-            process.wait(timeout=35)
+            process.wait(timeout=45)
             if process.returncode:
                 raise RuntimeError('Native GNOME checks failed; inspect ' + str(stage))
         finally:

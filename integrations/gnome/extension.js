@@ -307,14 +307,20 @@ export default class OmarchyDock extends Extension {
         if (this.idle) return;
         this.idle = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
             this.idle = 0;
-            if (this.reloadPending) { this.reloadPending = false; this.reload(); }
-            if (!this.press && !this.resize) this.sync();
+            if (this.press || this.resize) return GLib.SOURCE_REMOVE;
+            this.reloadQueued();
+            this.sync();
             return GLib.SOURCE_REMOVE;
         });
     }
+    reloadQueued() {
+        if (this.reloadPending) { this.reloadPending = false; this.reload(); }
+    }
     rebuild() {
+        if (this.resize) this.config.iconSize = this.resize.size;
         this.grab?.dismiss(); this.grab = null;
         this.press = null; this.drag = null; this.resize = null;
+        this.reloadQueued();
         this.panels.forEach(panel => panel.destroy());
         this.panels = Main.layoutManager.monitors.map(monitor => new DockPanel(this, monitor));
     }
@@ -398,7 +404,26 @@ export default class OmarchyDock extends Extension {
             this.panels.forEach(panel => panel.pointer(x, y));
         } else if (type === Clutter.EventType.BUTTON_RELEASE && event.get_button() === 1) {
             this.grab?.dismiss(); this.grab = null;
-            if (this.resize) { this.resize = null; this.save(); return Clutter.EVENT_STOP; }
+            if (this.resize) {
+                const size = this.config.iconSize;
+                this.resize = null;
+                this.reloadQueued();
+                this.config.iconSize = size;
+                this.save();
+                return Clutter.EVENT_STOP;
+            }
+            let dropSlot = -1;
+            if (this.press && this.drag) {
+                const panel = this.press.panel, size = panel.size();
+                const {x, y} = this.drag;
+                // The gesture ends on the displayed layout, before external size edits apply.
+                if (y >= panel.monitor.y + panel.monitor.height - panel.restHeight() - size
+                    && x >= panel.monitor.x && x <= panel.monitor.x + panel.monitor.width) {
+                    dropSlot = Math.max(0, Math.round((x - panel.monitor.x - (panel.monitor.width - panel.geometry.restWidth) / 2
+                        - Motion.metric(size, 0.18) - size / 2) / (size + Motion.metric(size, 0.14))));
+                }
+            }
+            this.reloadQueued();
             if (this.press) {
                 const press = this.press, drag = this.drag;
                 this.press = null; this.drag = null;
@@ -413,12 +438,8 @@ export default class OmarchyDock extends Extension {
                         && identity(entry.pin) !== id).map(entry => entry.pin);
                     this.config.pinned = this.config.pinned.filter(pin => !group.includes(pin));
                     if (!group.length) group.push({class: press.entry.cls, desktop: press.entry.app?.get_id()});
-                    if (drag.y >= panel.monitor.y + panel.monitor.height - panel.restHeight() - panel.size()
-                        && drag.x >= panel.monitor.x && drag.x <= panel.monitor.x + panel.monitor.width) {
-                        const at = Math.max(0, Math.min(this.config.pinned.length,
-                            Math.round((drag.x - panel.monitor.x - (panel.monitor.width - panel.geometry.restWidth) / 2
-                                - Motion.metric(panel.size(), 0.18) - panel.size() / 2)
-                                / (panel.size() + Motion.metric(panel.size(), 0.14)))));
+                    if (dropSlot >= 0) {
+                        const at = Math.min(this.config.pinned.length, dropSlot);
                         // The drop slot counts visible apps; unavailable pins and aliases
                         // keep their metadata without changing the displayed order.
                         const next = visible[Math.min(at, visible.length)];
@@ -437,6 +458,7 @@ export default class OmarchyDock extends Extension {
                 this.panels.forEach(panel => panel.clearGhost());
                 this.grab?.dismiss(); this.grab = null;
                 this.press = null; this.drag = null; this.resize = null;
+                this.reloadPending = false;
                 this.reload(); this.sync();
                 return Clutter.EVENT_STOP;
             }

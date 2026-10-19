@@ -14,7 +14,7 @@ The Quickshell interface shares the original artwork, geometry and pointer motio
 | Other compatible wlroots desktops | Foreign toplevel management and layer shell | Experimental; requires that exact protocol |
 | KDE Plasma 6 on Wayland | Quickshell panel plus temporary KWin scripts | Virtual KWin 6.7.4 discovery, minimize, restore and close passed; desktop QA pending |
 | Xfce, MATE and other EWMH X11 desktops | Quickshell panel plus X11 window events | Xvfb/Openbox launch, focus, minimize, restore and close passed; other window managers pending |
-| GNOME Shell 45 to 51 | Native extension | Headless GNOME 50.4 hover, menus, pinning, window actions and fullscreen hiding passed; other versions pending |
+| GNOME Shell 45 to 51 | Native extension | Headless GNOME 50.4 window actions, hover, menus, fullscreen hiding, mixed 125%/100% scaling and monitor reconnection passed; other versions pending |
 | Other Wayland compositors | Depends on their window and panel protocols | Unsupported until an adapter is tested |
 
 GNOME version declarations identify the API target. They do not establish that every listed version has been tested. A different distribution can use the same desktop adapter, but library and package availability must also be checked. XWayland does not expose every native Wayland window and is never used as a full desktop fallback.
@@ -26,6 +26,16 @@ For the Quickshell adapters, install Quickshell 0.3.1 or newer and Python 3. Qui
 X11 also needs Python Xlib and PyGObject. The window service uses X11 events and does not load application artwork. Plasma needs the `dbus` and `gi` Python modules and KWin 6 with its scripting service. The GNOME extension runs inside GNOME Shell and does not need Quickshell.
 
 Distribution package names differ. For example, Arch calls the Python dependencies `python-gobject` and `python-dbus`; Debian and Ubuntu use `python3-gi` and `python3-dbus`. Python Xlib is packaged as `python-xlib` on Arch and `python3-xlib` on Debian and Ubuntu. These names do not promise that the repository also supplies a sufficiently recent Quickshell.
+
+The candidate helper and GNOME installer were also checked in clean distribution containers:
+
+| Distribution | Python | Node | Checked layers |
+| --- | --- | --- | --- |
+| Ubuntu 24.04 | 3.12 | 18 | Native Python dependencies, 32 Python tests, JavaScript model tests and GNOME extension staging |
+| Debian 13 | 3.13 | 20 | Same layers |
+| Fedora 44 | 3.14 | 22 | Same layers |
+
+These are command-line and installer smoke tests. They do not establish native desktop behavior or Quickshell package availability on those distributions. The desktop table above records the separate compositor checks.
 
 ## Run outside Omarchy
 
@@ -100,6 +110,26 @@ python3 tools/test_gnome.py
 
 This creates a separate session bus, headless compositor, temporary user directories and a synthetic GTK application. It checks native window controls, menus, pinning, hover, fullscreen hiding and a rendered capture. It leaves its artifacts for inspection.
 
+To include mixed fractional scaling, one panel per monitor, resize cancellation on monitor removal and reconnection:
+
+```bash
+python3 tools/test_gnome.py --monitors
+```
+
+For Hyprland, use an unlocked desktop with `hyprctl`, Quickshell and Qt's QML runner installed:
+
+```bash
+python3 tools/test_hyprland.py --live
+```
+
+On Omarchy, also exercise the installed theme interface:
+
+```bash
+python3 tools/test_hyprland.py --live --omarchy-shell /usr/share/omarchy/shell
+```
+
+This explicitly targets the current desktop and temporarily focuses two small fixture windows. It checks the real provider's focus, minimize, restore and close actions without replacing the active dock or editing preferences. Omarchy mode also checks palette reload using private theme files. Only the uniquely identified fixtures are controlled, and child processes are stopped on exit. A locked session fails before any fixture starts. This provider check does not establish pointer behavior or panel rendering on the live desktop.
+
 After changing motion, regenerate the GNOME module and rerun the checks:
 
 ```bash
@@ -121,4 +151,4 @@ The recipe checks the archive checksum and runs the synthetic suite. Package bui
 
 ## Remaining release gates
 
-Native sessions must establish window actions, clean shutdown, menu dismissal, pointer response, pin/reorder/remove behavior, monitor changes and fractional scaling. Distribution checks must establish package instructions and startup behavior. Keep untested combinations experimental and do not replace the published release until these gates pass.
+The live Omarchy extraction and standalone Hyprland action checks remain pending. Desktop sessions must still establish panel behavior, clean shutdown, menu dismissal, pointer response, pin/reorder/remove behavior, monitor changes and fractional scaling for each intended adapter. GNOME 50.4 has passed the isolated mixed-monitor checks above; other desktop versions and real hardware remain unverified. Distribution smoke tests cover helper dependencies and staging, while package installation and desktop startup remain separate gates. Keep untested combinations experimental and do not replace the published release until these gates pass.
