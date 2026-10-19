@@ -7,10 +7,7 @@ stage.mkdir(exist_ok=True)
 source = (root_dir / 'plugin/Dock.qml').read_text()
 source = source.replace('import QtQuick\n', 'import QtQuick\nimport QtQuick.Window\n')
 source = source.replace('    id: root\n', '    id: root\n    property var testPanel\n    property alias fixturePins: config.pinned\n    property alias fixtureMagnify: config.magnify\n    property int activations: 0\n    property int launches: 0\n    property var fixtureMonitor: null\n    property var dispatches: []\n    function fixtureDispatch(value) { dispatches = dispatches.concat([value]) }\n', 1)
-source = source.replace('Quickshell.env("HOME") + "/.config/omarchy-dock/config.json"', json.dumps(str(stage / 'config.json')))
-start = source.index('    readonly property var windows: {')
-end = source.index('    function windowsOf', start)
-source = source[:start] + '    readonly property var windows: []\n\n' + source[end:]
+source = source.replace('(Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config") + "/omarchy-dock/config.json"', json.dumps(str(stage / 'config.json')))
 source = source.replace('model: Quickshell.screens', 'model: [{ width: 1000, name: "fixture" }]')
 source = source.replace('PanelWindow {', 'Window {')
 source = source.replace('            screen: modelData\n', '')
@@ -32,6 +29,7 @@ source = source.replace('            color: "transparent"\n', '''            col
             Component.onCompleted: root.testPanel = panel
 ''', 1)
 source = source.replace('PopupWindow {', 'Window {')
+source = source.replace('                grabFocus: true\n', '')
 source = source.replace('                anchor.window: panel\n                anchor.edges: Edges.Top\n                anchor.gravity: Edges.Top\n', '')
 source = source.replace('                id: menu\n', '''                id: menu
                 property real implicitWidth
@@ -45,9 +43,6 @@ source = source.replace('                id: menu\n', '''                id: men
                     property rect rect: Qt.rect(0, 0, 0, 0)
                 }
 ''')
-start = source.index('                HyprlandFocusGrab {')
-end = source.index('\n\n                Rectangle {', start)
-source = source[:start] + source[end:]
 source = source.replace('    Component.onCompleted: Hyprland.refreshToplevels()\n', '')
 source = source.replace('    function saveConfig() {\n        configFile.writeAdapter()\n    }', '    function saveConfig() {}')
 
@@ -66,10 +61,7 @@ def stub_function(text, name, body):
     return text[:brace + 1] + '\n        ' + body + '\n    }' + text[end:]
 
 
-source = stub_function(source, 'activateApp', 'activations += 1')
-source = stub_function(source, 'launch', 'launches += 1; launched(cls)')
-source = source.replace('Hyprland.dispatch(', 'fixtureDispatch(')
-source = source.replace('Hyprland.focusedMonitor', 'fixtureMonitor')
+source = stub_function(source, 'launch', 'launches += 1; activations += 1; launched(cls)')
 fixture_names = {'fixture.files': 'Files', 'fixture.browser': 'Browser', 'fixture.terminal': 'Terminal', 'fixture.mail': 'Mail', 'fixture.activity': 'Activity'}
 fixture_icons = {cls: (root_dir / 'tests/fixtures' / (name + '.svg')).as_uri() for cls,name in fixture_names.items()}
 source = stub_function(source, 'nameFor', 'return ' + json.dumps(fixture_names) + '[cls] || \"Application\"')
@@ -92,16 +84,32 @@ source = source[:start] + '''    QtObject {
         property real iconSize: 52
         property real magnification: 1.55
         property bool magnify: true
+        property bool reducedMotion: false
     }
 
 ''' + source[end:]
 start = source.index('    Timer {\n        interval: 3000')
 end = source.index('    function saveConfig', start)
 source = source[:start] + source[end:]
-start = source.index('    Connections {\n        target: Hyprland')
-end = source.index('    // --- the dock, one per screen', start)
-source = source[:start] + source[end:]
-source = source.replace('    readonly property var windows: []', '    property var windows: []')
+start = source.index('    property string backendName:')
+end = source.index('    // Outside the plugin', start)
+source = source[:start] + """    property string backendName: "Fixture"
+    property var palette: Color
+    QtObject {
+        id: fixtureBackend
+        property string errorText: ""
+        property var windows: []
+        function focusWindow(t) { root.fixtureDispatch("focus:" + t.address) }
+        function minimizeWindow(t) { root.fixtureDispatch("minimize:" + t.address) }
+        function restoreWindow(t) { root.fixtureDispatch("restore:" + t.address) }
+        function closeWindow(t) { root.fixtureDispatch("close:" + t.address) }
+    }
+    readonly property var backend: fixtureBackend
+    property alias fixtureWindows: fixtureBackend.windows
+
+""" + source[end:]
+source = source.replace('    readonly property var windows: backend ? backend.windows : []', '    property var windows: backend.windows')
+source = source.replace('import "DockMotion.js" as Motion', 'import "DockMotion.js" as Motion\nimport "TestPalette"')
 source = source.replace('Variants {\n        model:', 'Item {\n        id: fixtureVariant\n        property var model:')
 source = source.replace('required property var modelData\n', 'property var modelData: fixtureVariant.model[0]\n')
 source = source.replace('model: ScriptModel { values: root.apps }', 'model: root.apps')
@@ -119,3 +127,40 @@ palette.mkdir(exist_ok=True)
 surface = (root_dir / 'tests/Surface.qml.in').read_text()
 surface = surface.replace('__HOVER_IMAGE__', str(stage / 'hover.png')).replace('__REST_IMAGE__', str(stage / 'rest.png'))
 (stage / 'Surface.qml').write_text(surface)
+
+backend = (root_dir / 'plugin/backends/Wlr.qml').read_text()
+backend = '\n'.join(line for line in backend.splitlines() if not line.startswith('import Quickshell'))
+backend = backend.replace('Scope {', 'Item {', 1).replace('ToplevelManager.toplevels.values', 'root.fixtureToplevels')
+objects = '''    QtObject { id: first; property string appId: "app.a"; property string title: "A"; property bool activated: true; property bool minimized: false; function activate() { activated = true } function close() { root.fixtureToplevels = root.fixtureToplevels.filter(t => t !== first) } }
+    QtObject { id: second; property string appId: "app.b"; property string title: "B"; property bool activated: false; property bool minimized: false; function activate() { activated = true } function close() { root.fixtureToplevels = root.fixtureToplevels.filter(t => t !== second) } }
+    QtObject { id: third; property string appId: "app.c"; property string title: "C"; property bool activated: false; property bool minimized: false; function activate() { activated = true } function close() {} }
+    property alias fixtureFirst: first
+    property alias fixtureSecond: second
+    property alias fixtureThird: third
+    property var fixtureToplevels: [first, second]
+'''
+backend = backend.replace('    id: root\n', '    id: root\n' + objects, 1)
+(stage / 'WlrFixture.qml').write_text(backend)
+(stage / 'tst_backend.qml').write_text((root_dir / 'tests/Backend.qml.in').read_text())
+
+hypr = (root_dir / 'plugin/backends/Hyprland.qml').read_text()
+hypr = '\n'.join(line for line in hypr.splitlines() if not line.startswith('import Quickshell'))
+hypr = hypr.replace('Scope {', 'Item {', 1).replace('Hypr.Hyprland', 'compositor')
+hypr = hypr.replace('    id: root\n', '''    id: root
+    property var dispatches: []
+    property int refreshes: 0
+    function fixtureEvent(name) { compositor.rawEvent({ name: name }) }
+    property alias fixtureMonitor: compositor.focusedMonitor
+    property alias fixtureLua: compositor.usingLua
+    QtObject {
+        id: compositor
+        property bool usingLua: true
+        property var focusedMonitor: null
+        property var toplevels: ({ values: [] })
+        signal rawEvent(var event)
+        function refreshToplevels() { root.refreshes += 1 }
+        function dispatch(value) { root.dispatches = root.dispatches.concat([value]) }
+    }
+''', 1)
+(stage / 'HyprlandFixture.qml').write_text(hypr)
+(stage / 'tst_hyprland.qml').write_text((root_dir / 'tests/HyprlandBackend.qml.in').read_text())

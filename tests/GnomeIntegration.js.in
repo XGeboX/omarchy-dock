@@ -1,0 +1,121 @@
+import Clutter from 'gi://Clutter';
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import Shell from 'gi://Shell';
+import Dock from './dock.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+const sleep = milliseconds => new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, milliseconds,
+    () => { resolve(); return GLib.SOURCE_REMOVE; }));
+function check(value, message) { if (!value) throw new Error(message); }
+async function until(predicate) {
+    for (let i = 0; i < 50; i++) { if (predicate()) return; await sleep(50); }
+    throw new Error('Native window transition timed out');
+}
+
+export default class TestDock extends Dock {
+    enable() {
+        super.enable();
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            this.exercise().catch(error => this.result({error: String(error)}));
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+    result(value) {
+        Gio.File.new_for_path(__RESULT__).replace_contents(JSON.stringify(value), null, false,
+            Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+    }
+    phase(value) {
+        Gio.File.new_for_path(__PHASE__).replace_contents(value, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+    }
+    async capturePanel(panel, suffix) {
+        await sleep(150);
+        const entry = panel.entries.find(item => item.cls === 'fixture');
+        const actor = panel.items.get(entry.key).actor;
+        const [x, y] = actor.get_transformed_position();
+        panel.pointer(x + actor.width / 2, y + actor.height / 2);
+        await sleep(350);
+        check(panel.hovered && panel.state.strength > 0.99, 'Scaled native hover did not settle');
+        const monitor = panel.monitor, height = Math.min(220, monitor.height);
+        const path = __IMAGE__.replace(/\.png$/, '-' + suffix + '-' + monitor.index + '.png');
+        const stream = Gio.File.new_for_path(path).replace(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+        await new Shell.Screenshot().screenshot_area(monitor.x, monitor.y + monitor.height - height, monitor.width, height, stream);
+        stream.close(null);
+        panel.pointer(-100, -100);
+    }
+    checkPanels() {
+        for (const panel of this.panels) {
+            check(panel.geometry.left >= 0 && panel.geometry.left + panel.geometry.width <= panel.monitor.width,
+                'Dock exceeded its logical monitor bounds');
+            check(panel.actor.width === panel.monitor.width, 'Panel width did not track monitor geometry');
+        }
+    }
+    async exercise() {
+        Main.overview.hide();
+        await sleep(600);
+        await until(() => this.entries().find(entry => entry.cls === 'fixture')?.app?.get_windows().length);
+        const entry = this.entries().find(item => item.cls === 'fixture');
+        const window = entry.app.get_windows()[0];
+        Main.activateWindow(window);
+        await until(() => window.has_focus());
+        this.activate(entry);
+        await until(() => window.minimized);
+        this.activate(this.entries().find(item => item.window === window));
+        await until(() => !window.minimized && window.has_focus());
+        const panel = this.panels[0];
+        panel.openMenu(panel.items.get(entry.key));
+        await sleep(150);
+        check(panel.menu.isOpen, 'Native menu did not open');
+        panel.menu.close();
+        await sleep(350);
+        this.pin(entry);
+        check(!this.isPinned(entry.cls), 'Unpin failed');
+        this.pin(entry);
+        check(this.isPinned(entry.cls), 'Pin failed');
+        this.sync();
+        await sleep(100);
+        const actor = panel.items.get(entry.key).actor;
+        const [x, y] = actor.get_transformed_position();
+        panel.pointer(x + actor.width / 2, y + actor.height / 2);
+        await sleep(350);
+        check(panel.state.strength > 0.99, 'Hover did not settle');
+        const stream = Gio.File.new_for_path(__IMAGE__).replace(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+        await new Shell.Screenshot().screenshot_area(0, 500, 1280, 220, stream);
+        stream.close(null);
+        panel.pointer(-100, -100);
+        await sleep(650);
+        check(panel.state.strength === 0, 'Hover exit did not settle');
+        window.make_fullscreen();
+        await until(() => global.display.get_monitor_in_fullscreen(panel.monitor.index));
+        this.rebuild();
+        check(!this.panels[0].actor.visible, 'Rebuild exposed dock over fullscreen');
+        window.unmake_fullscreen();
+        await until(() => !global.display.get_monitor_in_fullscreen(0));
+        if (__MONITORS__) {
+            check(this.panels.length === 2, 'A dock was not created on each synthetic monitor');
+            const settings = new Gio.Settings({schema_id: 'org.gnome.mutter'});
+            settings.set_strv('experimental-features', ['scale-monitor-framebuffer']);
+            this.phase('scale');
+            await until(() => this.panels.some(panel => panel.monitor.width === 1024));
+            this.checkPanels();
+            for (const panel of this.panels) await this.capturePanel(panel, 'mixed-scale');
+            const size = this.config.iconSize;
+            this.resize = {panel: this.panels[1], size};
+            this.config.iconSize += 8;
+            this.phase('disconnect');
+            await until(() => this.panels.length === 1);
+            check(!this.resize && this.config.iconSize === size, 'Monitor removal did not cancel the active resize');
+            this.checkPanels();
+            this.phase('reconnect');
+            await until(() => this.panels.length === 2);
+            this.checkPanels();
+        }
+        this.panels[0].openMenu(this.panels[0].items.get(entry.key));
+        const close = this.panels[0].menu._getMenuItems().find(item => item.label?.text === 'Close');
+        check(close, 'Native close action missing');
+        close.activate(null);
+        await until(() => entry.app.get_windows().length === 0);
+        this.result({hover: true, exit: true, image: true, minimize: true, restore: true,
+            pin: true, menu: true, close: true, fullscreen: true, mixedScalingAndMonitors: __MONITORS__});
+    }
+}

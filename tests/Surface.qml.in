@@ -102,22 +102,30 @@ Item {
             panel.testMenu.visible = false
             leave()
         }
-        function test_06_restore_uses_workspace_selectors() {
-            const cases = [
-                { workspace: { id: 3, name: "3" }, selector: "3" },
-                { workspace: { id: -1337, name: "review-workspace" }, selector: "name:review-workspace" },
-                { workspace: { id: -1338, name: 'review "quoted"' }, selector: 'name:review "quoted"' },
-                { workspace: null, selector: "1" }
-            ]
-            for (const data of cases) {
-                dock.fixtureMonitor = { activeWorkspace: data.workspace }
-                dock.dispatches = []
-                dock.restoreWindow({ address: "beef" })
-                compare(dock.dispatches[0], 'hl.dsp.window.move({ window = "address:0xbeef", workspace = '
-                    + JSON.stringify(data.selector) + ', follow = true })')
-                compare(dock.dispatches[1], 'hl.dsp.focus({ window = "address:0xbeef" })')
-            }
-            dock.fixtureMonitor = null
+        function test_06_actions_follow_live_window_state() {
+            const cls = dock.apps[0]
+            const t = { address: "fixture-one", title: "Window", activated: true }
+            dock.windows = [{ cls: cls, minimized: false, tl: t }]
+            dock.dispatches = []
+            dock.activateApp(cls)
+            compare(dock.dispatches[0], "minimize:fixture-one")
+            dock.windows = [{ cls: cls, minimized: true, tl: t }]
+            dock.activateApp(cls)
+            compare(dock.dispatches[1], "restore:fixture-one")
+            dock.runAction("quit", cls, "")
+            compare(dock.dispatches[2], "close:fixture-one")
+            dock.windows = []
+        }
+        function test_06_stale_menu_cannot_target_another_app() {
+            const cls = dock.apps[0]
+            dock.windows = [{ cls: "another-app", minimized: true,
+                tl: { address: "reused-id", title: "Other app" } }]
+            dock.dispatches = []
+            dock.runAction("win:reused-id", cls, "")
+            dock.runAction("restore-one", cls, "reused-id")
+            dock.runAction("close-one", cls, "reused-id")
+            compare(dock.dispatches.length, 0)
+            dock.windows = []
         }
         function test_06_render_capture() {
             enter(2)
