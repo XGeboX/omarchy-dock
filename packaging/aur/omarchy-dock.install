@@ -1,0 +1,13 @@
+post_install() {
+  cat <<'MESSAGE'
+Omarchy Dock is installed. In your desktop session, run:
+  omarchy-dock enable
+MESSAGE
+}
+
+post_upgrade() {
+  cat <<'MESSAGE'
+To load the updated Omarchy Dock, run:
+  omarchy-dock enable
+MESSAGE
+}

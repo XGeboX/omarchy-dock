@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.test-artifacts/
+.release-artifacts/
+pkg/
+src/
+*.pkg.tar.*

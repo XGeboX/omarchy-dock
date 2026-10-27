@@ -1,0 +1,17 @@
+pkgbase = omarchy-dock
+	pkgdesc = Responsive, theme-aware application dock for the Omarchy shell
+	pkgver = 0.6.1
+	pkgrel = 1
+	url = https://github.com/XGeboX/omarchy-dock
+	install = omarchy-dock.install
+	arch = any
+	license = MIT
+	checkdepends = qt6-declarative
+	checkdepends = qt6-svg
+	depends = omarchy>=4.0.4
+	depends = quickshell>=0.3.1
+	depends = python
+	source = omarchy-dock-0.6.1.tar.gz::https://github.com/XGeboX/omarchy-dock/releases/download/v0.6.1/omarchy-dock-0.6.1.tar.gz
+	sha256sums = 213297ca9587bd2d11c08d629c41735ef8832150c0285abffddabc5bc5c435a9
+
+pkgname = omarchy-dock
